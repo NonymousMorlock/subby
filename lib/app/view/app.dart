@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:subby/app/routing/router.dart';
 import 'package:subby/l10n/l10n.dart';
 
 class App extends StatelessWidget {
@@ -6,7 +7,8 @@ class App extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
+      routerConfig: router,
       theme: ThemeData(
         appBarTheme: AppBarTheme(
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
