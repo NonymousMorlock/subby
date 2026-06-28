@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:subby/app/common/widgets/base_field.dart';
+import 'package:subby/core/constants/core_constants.dart';
 
 class OctetField extends StatelessWidget {
   const OctetField({
@@ -26,17 +28,31 @@ class OctetField extends StatelessWidget {
       textInputAction: .next,
       keyboardType: .number,
       validator: (value) {
-        if (value == null || value.trim().isEmpty) return '';
+        final normalisedValue = value?.trim().replaceAll(
+          CoreConstants.emptyCharacter,
+          '',
+        );
+        if (normalisedValue == null || normalisedValue.isEmpty) return '';
         return null;
       },
       onFieldSubmitted: (_) => nextFocusNode?.requestFocus(),
       inputFormatters: [
-        LengthLimitingTextInputFormatter(4, maxLengthEnforcement: .enforced),
-        FilteringTextInputFormatter.allow(RegExp('[0-9.]')),
+        LengthLimitingTextInputFormatter(5, maxLengthEnforcement: .enforced),
         TextInputFormatter.withFunction((previous, next) {
-          const blank = '\u200B';
+          final allowedPattern = RegExp('[0-9.]');
+          const blank = CoreConstants.emptyCharacter;
           final nextValue = next.text.trim().replaceAll(blank, '');
           final previousValue = previous.text.trim().replaceAll(blank, '');
+
+          for (final char in nextValue.characters) {
+            if (!allowedPattern.hasMatch(char)) {
+              log(
+                'Invalid character entered: $char, reverting to previous value',
+                name: 'OctetFieldFormatter',
+              );
+              return previous;
+            }
+          }
 
           final nextWithBlank = blank + nextValue;
           final previousWithBlank = blank + previousValue;
@@ -51,28 +67,73 @@ class OctetField extends StatelessWidget {
           );
 
           if (nextValue.isEmpty && previousWithBlank == blank) {
-            unawaited(
-              Future.microtask(() => previousFocusNode?.requestFocus()),
+            log(
+              'Backspace on empty field, moving focus to previous field',
+              name: 'OctetFieldFormatter',
             );
+            if (previousFocusNode != null) {
+              log(
+                'Requesting focus on previous field',
+                name: 'OctetFieldFormatter',
+              );
+              unawaited(
+                Future.microtask(() => previousFocusNode!.requestFocus()),
+              );
+            }
             return previousEditingValue;
           }
 
           if (nextValue.endsWith('.')) {
+            log(
+              'Dot entered, moving focus to next field',
+              name: 'OctetFieldFormatter',
+            );
             unawaited(Future.microtask(() => nextFocusNode?.requestFocus()));
             return previousEditingValue;
           }
 
-          if (nextValue.length > 3) return previousEditingValue;
+          if (nextValue.length > 3) {
+            log(
+              'Octet value too long: $nextValue, reverting to previous value',
+              name: 'OctetFieldFormatter',
+            );
+            unawaited(Future.microtask(() => nextFocusNode?.requestFocus()));
+            return previousEditingValue;
+          }
 
           final parsedNextValue = int.tryParse(nextValue);
-          if (parsedNextValue == null || parsedNextValue > 255) {
+          if (nextValue.isNotEmpty &&
+              (parsedNextValue == null || parsedNextValue > 255)) {
+            log(
+              'Invalid octet value: $nextValue, reverting to previous value',
+              name: 'OctetFieldFormatter',
+            );
             return previousEditingValue;
           }
 
-          if (nextValue.length == 3 &&
-              nextValue.length > previousValue.length) {
+          if (nextValue.length == 3) {
+            log(
+              'Octet complete, moving focus to next field',
+              name: 'OctetFieldFormatter',
+            );
             unawaited(Future.microtask(() => nextFocusNode?.requestFocus()));
+          } else if (nextValue.length == 2) {
+            final firstCodeUnit = nextValue.codeUnitAt(0);
+            final secondCodeUnit = nextValue.codeUnitAt(1);
+
+            if (firstCodeUnit > 50 ||
+                (firstCodeUnit == 50 && secondCodeUnit > 53)) {
+              log(
+                'Octet value will exceed 255, moving focus to next field',
+                name: 'OctetFieldFormatter',
+              );
+              unawaited(Future.microtask(() => nextFocusNode?.requestFocus()));
+            }
           }
+          log(
+            'Accepting octet value: $nextValue',
+            name: 'OctetFieldFormatter',
+          );
           return nextEditingValue;
         }),
       ],

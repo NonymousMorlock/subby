@@ -19,10 +19,6 @@ class CidrField extends StatelessWidget {
       focusNode: focusNode,
       textInputAction: .done,
       keyboardType: .number,
-      validator: (value) {
-        if (value == null || value.trim().isEmpty) return '';
-        return null;
-      },
       inputFormatters: [
         LengthLimitingTextInputFormatter(2, maxLengthEnforcement: .enforced),
         FilteringTextInputFormatter.digitsOnly,

@@ -1,4 +1,12 @@
+import 'dart:developer';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:subby/core/constants/core_constants.dart';
+import 'package:subby/src/home/domain/entities/cidr_prefix.dart';
+import 'package:subby/src/home/domain/entities/ipv4_address.dart';
+import 'package:subby/src/home/domain/entities/ipv4_network.dart';
+import 'package:subby/src/home/presentation/layout/active_octet.dart';
 import 'package:subby/src/home/presentation/widgets/cidr_field.dart';
 import 'package:subby/src/home/presentation/widgets/octet_field.dart';
 
@@ -13,7 +21,7 @@ class _HomeViewState extends State<HomeView> {
   final GlobalKey<FormState> _formKey = GlobalKey();
   final List<TextEditingController> _addressControllers = List.generate(
     4,
-    (_) => TextEditingController(text: '\u200B'),
+    (_) => TextEditingController(text: CoreConstants.emptyCharacter),
   );
 
   final List<FocusNode> _focusNodes = List.generate(4, (_) => FocusNode());
@@ -21,8 +29,145 @@ class _HomeViewState extends State<HomeView> {
   final cidrPrefixController = TextEditingController();
   final cidrPrefixFocusNode = FocusNode();
 
+  Ipv4Network? _workingAddress;
+
   int _getOctetValue(TextEditingController octetController) {
-    return int.parse(octetController.text.trim().replaceAll('\u200B', ''));
+    return int.parse(
+      octetController.text.trim().replaceAll(CoreConstants.emptyCharacter, ''),
+    );
+  }
+
+  static const _cidrSubnet = {
+    [1, 9, 17, 25]: 128,
+    [2, 10, 18, 26]: 192,
+    [3, 11, 19, 27]: 224,
+    [4, 12, 20, 28]: 240,
+    [5, 13, 21, 29]: 248,
+    [6, 14, 22, 30]: 252,
+    [7, 15, 23, 31]: 254,
+    [8, 16, 24, 32]: 255,
+  };
+
+  bool _isCidrPrefixEmpty = true;
+
+  int getHostCount(CidrPrefix cidrPrefix) {
+    final hostBits = 32 - cidrPrefix.value;
+    return math.pow(2, hostBits).toInt() - 2;
+  }
+
+  int _getSubnet(int prefix) {
+    return _cidrSubnet.entries
+        .firstWhere((entry) => entry.key.contains(prefix))
+        .value;
+  }
+
+  Ipv4Address getSubnetMask(CidrPrefix cidrPrefix) {
+    final prefix = cidrPrefix.value;
+    List<int> octets;
+    if (prefix == 0) {
+      octets = [0, 0, 0, 0];
+    } else if (prefix < 9) {
+      octets = [_getSubnet(prefix), 0, 0, 0];
+    } else if (prefix < 17) {
+      octets = [255, _getSubnet(prefix), 0, 0];
+    } else if (prefix < 25) {
+      octets = [255, 255, _getSubnet(prefix), 0];
+    } else {
+      octets = [255, 255, 255, _getSubnet(prefix)];
+    }
+    return Ipv4Address(octets);
+  }
+
+  ActiveOctet getActiveOctet(Ipv4Address subnetMask) {
+    final index = subnetMask.octets.indexWhere((octet) => octet < 255);
+    final octetPosition = OctetPosition.fromIndex(index);
+
+    final blockSize = 256 - subnetMask.octets[index];
+
+    return ActiveOctet(position: octetPosition, blockSize: blockSize);
+  }
+
+  Ipv4Address getNetworkAddress({
+    required Ipv4Address address,
+    required ActiveOctet activeOctet,
+  }) {
+    final activeOctetIPValue = address.octets[activeOctet.position.rawIndex];
+    final blockSize = activeOctet.blockSize;
+
+    for (var i = 0; i < 256; i += blockSize) {
+      if (i + blockSize > activeOctetIPValue) {
+        final networkAddress = List<int>.from(address.octets);
+        networkAddress[activeOctet.position.rawIndex] = i;
+        for (var i = activeOctet.position.rawIndex + 1; i < 4; i++) {
+          networkAddress[i] = 0;
+        }
+        return Ipv4Address(networkAddress);
+      }
+    }
+    throw Exception('Unable to calculate network address');
+  }
+
+  Ipv4Address getBroadcastAddress({
+    required Ipv4Address networkAddress,
+    required ActiveOctet activeOctet,
+  }) {
+    final broadcastAddress = List<int>.from(networkAddress.octets);
+    final activeIndex = activeOctet.position.rawIndex;
+    for (var i = activeIndex; i < 4; i++) {
+      if (i == activeIndex) {
+        broadcastAddress[i] =
+            (networkAddress.octets[i] + activeOctet.blockSize) - 1;
+      } else if (i > activeIndex) {
+        broadcastAddress[i] = 255;
+      }
+    }
+    return Ipv4Address(broadcastAddress);
+  }
+
+  void findNetworkDetails(Ipv4Network network) {
+    final hostCount = getHostCount(network.prefix!);
+    final subnetMask = getSubnetMask(network.prefix!);
+    final activeOctet = getActiveOctet(subnetMask);
+
+    final networkAddress = getNetworkAddress(
+      address: network.address,
+      activeOctet: activeOctet,
+    );
+
+    final broadcastAddress = getBroadcastAddress(
+      networkAddress: networkAddress,
+      activeOctet: activeOctet,
+    );
+    log('Host Count: $hostCount');
+    log('Subnet Mask: ${subnetMask.presentation}');
+    log('Network Address: ${networkAddress.presentation}');
+    log('Broadcast Address: ${broadcastAddress.presentation}');
+  }
+
+  void clearFields() {
+    for (var i = 0; i < _addressControllers.length; i++) {
+      _addressControllers[i].text = CoreConstants.emptyCharacter;
+    }
+    cidrPrefixController.text = '';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    cidrPrefixController.addListener(_cidrPrefixListener);
+  }
+
+  void _cidrPrefixListener() {
+    final isEmpty = cidrPrefixController.text.trim().isEmpty;
+    if (isEmpty && !_isCidrPrefixEmpty) {
+      setState(() {
+        _isCidrPrefixEmpty = true;
+      });
+    } else if (!isEmpty && _isCidrPrefixEmpty) {
+      setState(() {
+        _isCidrPrefixEmpty = false;
+      });
+    }
   }
 
   @override
@@ -31,11 +176,17 @@ class _HomeViewState extends State<HomeView> {
       _focusNodes[i].dispose();
       _addressControllers[i].dispose();
     }
+    cidrPrefixController
+      ..removeListener(_cidrPrefixListener)
+      ..dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
+    final colourScheme = theme.colorScheme;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -104,9 +255,37 @@ class _HomeViewState extends State<HomeView> {
                     ),
                   ),
                 ),
+                if (_isCidrPrefixEmpty)
+                  Center(
+                    child: Text(
+                      'Leaving the CIDR prefix empty sets it to '
+                      '0 automatically',
+                      style: textTheme.labelSmall?.copyWith(
+                        color: colourScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 FilledButton(
                   onPressed: () {
-                    _formKey.currentState!.validate();
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    if (_formKey.currentState!.validate()) {
+                      final octets = _addressControllers
+                          .map(_getOctetValue)
+                          .toList(growable: false);
+                      final address = Ipv4Address(octets);
+                      final cidrPrefixValue =
+                          int.tryParse(
+                            cidrPrefixController.text.trim(),
+                          ) ??
+                          0;
+                      final cidrPrefix = CidrPrefix(cidrPrefixValue);
+                      _workingAddress = Ipv4Network(
+                        address: address,
+                        prefix: cidrPrefix,
+                      );
+                      findNetworkDetails(_workingAddress!);
+                      clearFields();
+                    }
                   },
                   child: const Text('Submit'),
                 ),

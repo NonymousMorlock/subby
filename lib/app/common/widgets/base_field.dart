@@ -29,6 +29,7 @@ class BaseField extends StatelessWidget {
       child: TextFormField(
         controller: controller,
         focusNode: focusNode,
+        selectAllOnFocus: false,
         textInputAction: textInputAction,
         keyboardType: keyboardType,
         textAlign: .center,
