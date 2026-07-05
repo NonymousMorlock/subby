@@ -7,8 +7,10 @@ import 'package:subby/src/home/domain/entities/cidr_prefix.dart';
 import 'package:subby/src/home/domain/entities/ipv4_address.dart';
 import 'package:subby/src/home/domain/entities/ipv4_network.dart';
 import 'package:subby/src/home/presentation/layout/active_octet.dart';
+import 'package:subby/src/home/presentation/layout/subnet_calculation_result.dart';
 import 'package:subby/src/home/presentation/widgets/cidr_field.dart';
 import 'package:subby/src/home/presentation/widgets/octet_field.dart';
+import 'package:subby/src/home/presentation/widgets/results_card.dart';
 
 class HomeView extends StatefulWidget {
   const HomeView({super.key});
@@ -29,7 +31,7 @@ class _HomeViewState extends State<HomeView> {
   final cidrPrefixController = TextEditingController();
   final cidrPrefixFocusNode = FocusNode();
 
-  Ipv4Network? _workingAddress;
+  SubnetCalculationResult? _result;
 
   int _getOctetValue(TextEditingController octetController) {
     return int.parse(
@@ -52,7 +54,7 @@ class _HomeViewState extends State<HomeView> {
 
   int getHostCount(CidrPrefix cidrPrefix) {
     final hostBits = 32 - cidrPrefix.value;
-    return math.pow(2, hostBits).toInt() - 2;
+    return math.max(0, math.pow(2, hostBits).toInt() - 2);
   }
 
   int _getSubnet(int prefix) {
@@ -78,8 +80,9 @@ class _HomeViewState extends State<HomeView> {
     return Ipv4Address(octets);
   }
 
-  ActiveOctet getActiveOctet(Ipv4Address subnetMask) {
+  ActiveOctet? getActiveOctet(Ipv4Address subnetMask) {
     final index = subnetMask.octets.indexWhere((octet) => octet < 255);
+    if (index == -1) return null;
     final octetPosition = OctetPosition.fromIndex(index);
 
     final blockSize = 256 - subnetMask.octets[index];
@@ -89,8 +92,9 @@ class _HomeViewState extends State<HomeView> {
 
   Ipv4Address getNetworkAddress({
     required Ipv4Address address,
-    required ActiveOctet activeOctet,
+    required ActiveOctet? activeOctet,
   }) {
+    if (activeOctet == null) return address;
     final activeOctetIPValue = address.octets[activeOctet.position.rawIndex];
     final blockSize = activeOctet.blockSize;
 
@@ -109,8 +113,9 @@ class _HomeViewState extends State<HomeView> {
 
   Ipv4Address getBroadcastAddress({
     required Ipv4Address networkAddress,
-    required ActiveOctet activeOctet,
+    required ActiveOctet? activeOctet,
   }) {
+    if (activeOctet == null) return networkAddress;
     final broadcastAddress = List<int>.from(networkAddress.octets);
     final activeIndex = activeOctet.position.rawIndex;
     for (var i = activeIndex; i < 4; i++) {
@@ -124,7 +129,7 @@ class _HomeViewState extends State<HomeView> {
     return Ipv4Address(broadcastAddress);
   }
 
-  void findNetworkDetails(Ipv4Network network) {
+  SubnetCalculationResult findNetworkDetails(Ipv4Network network) {
     final hostCount = getHostCount(network.prefix!);
     final subnetMask = getSubnetMask(network.prefix!);
     final activeOctet = getActiveOctet(subnetMask);
@@ -142,13 +147,13 @@ class _HomeViewState extends State<HomeView> {
     log('Subnet Mask: ${subnetMask.presentation}');
     log('Network Address: ${networkAddress.presentation}');
     log('Broadcast Address: ${broadcastAddress.presentation}');
-  }
-
-  void clearFields() {
-    for (var i = 0; i < _addressControllers.length; i++) {
-      _addressControllers[i].text = CoreConstants.emptyCharacter;
-    }
-    cidrPrefixController.text = '';
+    return SubnetCalculationResult(
+      network: network,
+      hostCount: hostCount,
+      subnetMask: subnetMask,
+      networkAddress: networkAddress,
+      broadcastAddress: broadcastAddress,
+    );
   }
 
   @override
@@ -176,6 +181,7 @@ class _HomeViewState extends State<HomeView> {
       _focusNodes[i].dispose();
       _addressControllers[i].dispose();
     }
+    cidrPrefixFocusNode.dispose();
     cidrPrefixController
       ..removeListener(_cidrPrefixListener)
       ..dispose();
@@ -189,109 +195,145 @@ class _HomeViewState extends State<HomeView> {
     final colourScheme = theme.colorScheme;
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const .all(16),
-          child: Center(
-            child: Column(
-              mainAxisSize: .min,
-              mainAxisAlignment: .center,
-              spacing: 20,
-              children: [
-                Form(
-                  key: _formKey,
-                  child: SizedBox(
-                    height: 50,
-                    child: Center(
-                      child: Row(
-                        mainAxisAlignment: .center,
-                        mainAxisSize: .min,
-                        spacing: 10,
-                        children: [
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius:
-                                  const OutlineInputBorder().borderRadius,
-                            ),
-                            child: ListView.separated(
-                              physics: const NeverScrollableScrollPhysics(),
-                              padding: .zero,
-                              scrollDirection: .horizontal,
-                              shrinkWrap: true,
-                              itemCount: 4,
-                              separatorBuilder: (_, index) {
-                                return const Center(child: Text('.'));
-                              },
-                              itemBuilder: (_, index) {
-                                final controller = _addressControllers[index];
-                                final focusNode = _focusNodes[index];
-                                final nextFocusNode = index == 3
-                                    ? null
-                                    : _focusNodes[index + 1];
-                                final previousFocusNode = index == 0
-                                    ? null
-                                    : _focusNodes[index - 1];
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const .all(16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 32,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 620),
+                    child: Column(
+                      mainAxisAlignment: _result == null
+                          ? MainAxisAlignment.center
+                          : MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      spacing: 20,
+                      children: [
+                        Text(
+                          'Subnet Calculator',
+                          textAlign: TextAlign.center,
+                          style: textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          'Enter an IPv4 address and CIDR prefix to view the '
+                          'network values immediately below.',
+                          textAlign: TextAlign.center,
+                          style: textTheme.bodyMedium?.copyWith(
+                            color: colourScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        Form(
+                          key: _formKey,
+                          child: SizedBox(
+                            height: 50,
+                            child: Center(
+                              child: Row(
+                                mainAxisAlignment: .center,
+                                mainAxisSize: .min,
+                                spacing: 10,
+                                children: [
+                                  DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: const OutlineInputBorder()
+                                          .borderRadius,
+                                    ),
+                                    child: ListView.separated(
+                                      physics:
+                                          const NeverScrollableScrollPhysics(),
+                                      padding: .zero,
+                                      scrollDirection: .horizontal,
+                                      shrinkWrap: true,
+                                      itemCount: 4,
+                                      separatorBuilder: (_, index) {
+                                        return const Center(
+                                          child: Text('.'),
+                                        );
+                                      },
+                                      itemBuilder: (_, index) {
+                                        final controller =
+                                            _addressControllers[index];
+                                        final focusNode = _focusNodes[index];
+                                        final nextFocusNode = index == 3
+                                            ? null
+                                            : _focusNodes[index + 1];
+                                        final previousFocusNode = index == 0
+                                            ? null
+                                            : _focusNodes[index - 1];
 
-                                return OctetField(
-                                  key: ValueKey(index),
-                                  controller: controller,
-                                  focusNode: focusNode,
-                                  nextFocusNode: nextFocusNode,
-                                  previousFocusNode: previousFocusNode,
-                                );
-                              },
+                                        return OctetField(
+                                          key: ValueKey(index),
+                                          controller: controller,
+                                          focusNode: focusNode,
+                                          nextFocusNode: nextFocusNode,
+                                          previousFocusNode: previousFocusNode,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  const Text(
+                                    '/',
+                                    style: TextStyle(fontSize: 30),
+                                  ),
+                                  CidrField(
+                                    controller: cidrPrefixController,
+                                    focusNode: cidrPrefixFocusNode,
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                          const Text(
-                            '/',
-                            style: TextStyle(fontSize: 30),
+                        ),
+                        if (_isCidrPrefixEmpty)
+                          Center(
+                            child: Text(
+                              'Leaving the CIDR prefix empty sets it to '
+                              '0 automatically',
+                              style: textTheme.labelSmall?.copyWith(
+                                color: colourScheme.onSurfaceVariant,
+                              ),
+                            ),
                           ),
-                          CidrField(
-                            controller: cidrPrefixController,
-                            focusNode: cidrPrefixFocusNode,
-                          ),
-                        ],
-                      ),
+                        FilledButton(
+                          onPressed: () {
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            if (_formKey.currentState!.validate()) {
+                              final octets = _addressControllers
+                                  .map(_getOctetValue)
+                                  .toList(growable: false);
+                              final address = Ipv4Address(octets);
+                              final cidrPrefixValue =
+                                  int.tryParse(
+                                    cidrPrefixController.text.trim(),
+                                  ) ??
+                                  0;
+                              final cidrPrefix = CidrPrefix(cidrPrefixValue);
+                              final workingAddress = Ipv4Network(
+                                address: address,
+                                prefix: cidrPrefix,
+                              );
+                              setState(() {
+                                _result = findNetworkDetails(workingAddress);
+                              });
+                            }
+                          },
+                          child: const Text('Submit'),
+                        ),
+                        if (_result case final result?)
+                          ResultsCard(result: result),
+                      ],
                     ),
                   ),
                 ),
-                if (_isCidrPrefixEmpty)
-                  Center(
-                    child: Text(
-                      'Leaving the CIDR prefix empty sets it to '
-                      '0 automatically',
-                      style: textTheme.labelSmall?.copyWith(
-                        color: colourScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                FilledButton(
-                  onPressed: () {
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    if (_formKey.currentState!.validate()) {
-                      final octets = _addressControllers
-                          .map(_getOctetValue)
-                          .toList(growable: false);
-                      final address = Ipv4Address(octets);
-                      final cidrPrefixValue =
-                          int.tryParse(
-                            cidrPrefixController.text.trim(),
-                          ) ??
-                          0;
-                      final cidrPrefix = CidrPrefix(cidrPrefixValue);
-                      _workingAddress = Ipv4Network(
-                        address: address,
-                        prefix: cidrPrefix,
-                      );
-                      findNetworkDetails(_workingAddress!);
-                      clearFields();
-                    }
-                  },
-                  child: const Text('Submit'),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         ),
       ),
     );
